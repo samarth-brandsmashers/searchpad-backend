@@ -17,6 +17,8 @@ import pyttsx3
 from pydantic import BaseModel
 from pptx.util import Inches, Pt
 from fastapi.responses import FileResponse, StreamingResponse
+from PIL import Image
+from pptx.dml.color import RGBColor
 
 # Load environment variables from .env file
 load_dotenv()
@@ -141,7 +143,7 @@ def text_to_speech(text: str = "Hi, You are using Python. Have a nice day", lang
         if os.path.exists(final_output_file):
             os.remove(final_output_file)
 
-openai.api_key = '<openai_key>'
+openai.api_key = '<openaikey>'
 
 class ImageRequest(BaseModel):
     prompt: str
@@ -229,9 +231,15 @@ class PresentationRequest(BaseModel):
     slides: list[Slide]
 
 @app.post("/generate-presentation/")
-async def generate_presentation(prompt: str = Form(...), slide_count: int = Form(...)):
+async def generate_presentation(prompt: str = Form(...), slide_count: int = Form(...),primary_color: str = Form(...), secondary_color: str = Form(...)):
     try:
         print(f"Generating Presentation with {slide_count} slides")
+
+        # Convert the user-provided color to RGB
+        primary_rgb = hex_to_rgb(primary_color)
+        secondary_rgb = hex_to_rgb(secondary_color)
+
+
 
         # Create a new PowerPoint presentation
         presentation = Presentation()
@@ -260,6 +268,12 @@ async def generate_presentation(prompt: str = Form(...), slide_count: int = Form
             slide_layout = presentation.slide_layouts[1]  # Title and Content layout
             slide = presentation.slides.add_slide(slide_layout)
 
+             # Set slide background to primary color
+            slide_bg = slide.background
+            fill = slide_bg.fill
+            fill.solid()
+            fill.fore_color.rgb = RGBColor(*primary_rgb)
+
             # Set the AI-generated title
             title = slide.shapes.title
             title.text = title_text
@@ -268,10 +282,17 @@ async def generate_presentation(prompt: str = Form(...), slide_count: int = Form
             content = slide.placeholders[1]
             content.text = content_text
 
+                    # Apply secondary color to content text
+            for paragraph in content.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(16)  # Set a reasonable font size
+                    run.font.color.rgb = RGBColor(*secondary_rgb)  # Apply secondary color to text
+            content.text_frame.word_wrap = True  # Ensure text wraps within the text box    
+
             # Auto-fit the content to prevent it from going outside the slide
             for paragraph in content.text_frame.paragraphs:
                 for run in paragraph.runs:
-                    run.font.size = Pt(14)  # Set a reasonable font size
+                    run.font.size = Pt(16)  # Set a reasonable font size
             content.text_frame.word_wrap = True  # Ensure text wraps within the text box
 
             # Fetch an image related to the keywords using an image API
@@ -333,6 +354,14 @@ def extract_text_by_label(text: str, label: str, default: str = "") -> str:
     except Exception as e:
         print(f"Error extracting {label}: {e}")
         return default
+
+def hex_to_rgb(hex_color: str) -> tuple:
+    """
+    Converts a hex color string (e.g., "#RRGGBB") to an RGB tuple.
+    """
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
 
 def get_image_url_based_on_keywords(keywords: str) -> str:
     url = f"https://api.pexels.com/v1/search?query={keywords}&per_page=1"
