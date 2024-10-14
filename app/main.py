@@ -291,6 +291,20 @@ async def generate_presentation(prompt: str = Form(...), primary_color: str = Fo
             content = slide.placeholders[1]
             content.text = content_text
 
+                    # Apply secondary color to content text
+            for paragraph in content.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(16)  # Set a reasonable font size
+                    run.font.color.rgb = RGBColor(*secondary_rgb)  # Apply secondary color to text
+            content.text_frame.word_wrap = True  # Ensure text wraps within the text box    
+
+                    # Apply secondary color to content text 
+            for paragraph in content.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(16)  # Set a reasonable font size
+                    run.font.color.rgb = RGBColor(*secondary_rgb)  # Apply secondary color to text
+            content.text_frame.word_wrap = True  # Ensure text wraps within the text box    
+
             # Apply secondary color to content text
             for paragraph in content.text_frame.paragraphs:
                 for run in paragraph.runs:
