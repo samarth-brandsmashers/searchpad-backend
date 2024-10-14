@@ -3,7 +3,6 @@ from app.routes import video
 from dotenv import load_dotenv
 import os
 from io import BytesIO
-from google.cloud import texttospeech
 from fastapi import FastAPI, Form, HTTPException , BackgroundTasks
 from pptx import Presentation
 import requests, time, json
@@ -15,7 +14,7 @@ import os
 from gtts import gTTS
 import tempfile
 import numpy as np
-import pyttsx3
+
 from pydantic import BaseModel
 from pptx.util import Inches, Pt
 from fastapi.responses import FileResponse, StreamingResponse
@@ -96,7 +95,7 @@ def generate_video():
         print(f"Error occurred: {str(e)}")
         return {"error": str(e)}
 
-openai.api_key = '<openai_key>'
+openai.api_key = os.getenv('API_KEY')
 
 class TTSRequest(BaseModel):
     text: str
