@@ -1,11 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from app.routes import video
 from dotenv import load_dotenv
 import os
 from io import BytesIO
-from fastapi import FastAPI, Form, HTTPException
+from google.cloud import texttospeech
+from fastapi import FastAPI, Form, HTTPException , BackgroundTasks
 from pptx import Presentation
 import requests, time, json
+
 import uvicorn
 import openai
 import cv2
@@ -17,6 +19,11 @@ import pyttsx3
 from pydantic import BaseModel
 from pptx.util import Inches, Pt
 from fastapi.responses import FileResponse, StreamingResponse
+import asyncio
+from fastapi.middleware.cors import CORSMiddleware
+from pptx.dml.color import RGBColor
+from PIL import Image
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,6 +32,15 @@ app = FastAPI(
     title="AI Video Generation API",
     description="API for generating videos using AI based on user prompts.",
     version="1.0.0"
+)
+
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins; you can specify specific origins like ["http://example.com"]
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods; you can specify specific methods like ["GET", "POST"]
+    allow_headers=["*"],  # Allow all headers; you can specify specific headers like ["X-Custom-Header"]
 )
 
 # Include video routes
@@ -80,68 +96,62 @@ def generate_video():
         print(f"Error occurred: {str(e)}")
         return {"error": str(e)}
 
+openai.api_key = '<openai_key>'
 
-@app.post("/voiceover/")
-def text_to_speech(text: str = "Hi, You are using Python. Have a nice day", lang: str = 'en', age: int = 50, gender: str = 'male', accent: str = 'Indian'):
+class TTSRequest(BaseModel):
+    text: str
+    voice_engine: str
+    voice: str
+    output_format: str
+    emotion: str
+
+@app.post("/text-to-speech/")
+async def text_to_speech(tts_request: TTSRequest, background_tasks: BackgroundTasks):
+    temp_file_path = None  # Initialize the temp_file_path variable
+
     try:
-        print("Starting text-to-speech conversion...")  # Debugging message
+        USER_ID = "UI21VZi4vick3DNf2W2dcyu5Sdt1"
+        API_KEY = "c3a3cc60b1384da2838862d2cd6f8b83"
 
-        # Temporary file for gTTS output
-        tts_temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-        
-        # Generate audio file using gTTS
-        lang_code = 'en'
-        if accent == 'british':
-            lang_code = 'en-GB'
-        elif accent == 'australian':
-            lang_code = 'en-AU'
-        elif accent == 'indian':
-            lang_code = 'en-IN'
+        url = "https://api.play.ht/api/v2/tts/stream"
+        headers = {
+            'X-USER-ID': USER_ID,
+            'AUTHORIZATION': API_KEY,
+            'accept': 'audio/mpeg',
+            'content-type': 'application/json'
+        }
 
-        tts = gTTS(text=text, lang=lang_code)
-        tts.save(tts_temp_file.name)
-        print(f"gTTS audio file '{tts_temp_file.name}' generated successfully.")  # Debugging message
+        data = {
+            "text": tts_request.text,
+            "voice_engine": tts_request.voice_engine,
+            "voice": tts_request.voice,
+            "output_format": tts_request.output_format,
+            "emotion": tts_request.emotion
+        }
 
-        # Initialize the TTS engine for pyttsx3
-        engine = pyttsx3.init()
-        
-        # Set properties based on gender (adjust as needed for your system)
-        if gender == 'male':
-            engine.setProperty('voice', 'english-us')  # Default male voice
-        elif gender == 'female':
-            engine.setProperty('voice', 'english-us-female')  # Assuming this voice exists
+        response = requests.post(url, headers=headers, json=data)
 
-        # Adjust speech characteristics based on age (hypothetical)
-        if age < 12:
-            engine.setProperty('rate', 150)  # Child voice characteristics
-        elif age < 30:
-            engine.setProperty('rate', 175)  # Young adult voice characteristics
-        elif age < 50:
-            engine.setProperty('rate', 160)  # Middle-aged voice characteristics
-        else:
-            engine.setProperty('rate', 140)  # Older voice characteristics
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
 
-        # Create a final output file
-        final_output_file = "output_combined.mp3"
-        engine.save_to_file(f'This is a combined output. {text}', final_output_file)
-        engine.runAndWait()
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+            temp_file.write(response.content)
+            temp_file_path = temp_file.name  # Store the path of the created file
 
-        print(f"Combined audio file '{final_output_file}' generated successfully.")  # Debugging message
-        
-        return FileResponse(final_output_file, media_type='audio/mpeg', filename=final_output_file)
+        # Schedule the deletion of the temporary file after the response is sent
+        background_tasks.add_task(delete_file, temp_file_path)
+
+        # Return the audio file as a FileResponse
+        return FileResponse(temp_file_path, media_type='audio/mpeg', filename='result.mp3')
 
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # Cleanup temporary files
 
-        if os.path.exists(tts_temp_file.name):
-            os.remove(tts_temp_file.name)
-        if os.path.exists(final_output_file):
-            os.remove(final_output_file)
 
-openai.api_key = '<openai_key>'
+async def delete_file(file_path: str):
+    await asyncio.sleep(5)  # Optional delay before deletion
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
 class ImageRequest(BaseModel):
     prompt: str
@@ -188,6 +198,7 @@ def sharpen_image(image_url: str) -> np.ndarray:
 
 @app.post("/graphic/")
 async def generate_image(request: ImageRequest):
+    print(request)
     try:
         # Call OpenAI's DALL-E API to generate an image
         response = openai.Image.create(
@@ -206,9 +217,10 @@ async def generate_image(request: ImageRequest):
         # _, buffer = cv2.imencode('.png', sharpened_image)
         # sharpened_image_bytes = buffer.tobytes()
         print(image_url)
-        return StreamingResponse(BytesIO(image_url), media_type="image/png")
+        return Response(content=image_url, media_type="text/plain")
  
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
     
 # Helper function to download image from URL
@@ -229,9 +241,14 @@ class PresentationRequest(BaseModel):
     slides: list[Slide]
 
 @app.post("/generate-presentation/")
-async def generate_presentation(prompt: str = Form(...), slide_count: int = Form(...)):
+async def generate_presentation(prompt: str = Form(...), primary_color: str = Form(...), secondary_color: str = Form(...)):
     try:
+        slide_count = 6
         print(f"Generating Presentation with {slide_count} slides")
+        
+        # Convert the user-provided color to RGB
+        primary_rgb = hex_to_rgb(primary_color)
+        secondary_rgb = hex_to_rgb(secondary_color)
 
         # Create a new PowerPoint presentation
         presentation = Presentation()
@@ -260,6 +277,12 @@ async def generate_presentation(prompt: str = Form(...), slide_count: int = Form
             slide_layout = presentation.slide_layouts[1]  # Title and Content layout
             slide = presentation.slides.add_slide(slide_layout)
 
+            # Set slide background to primary color
+            slide_bg = slide.background
+            fill = slide_bg.fill
+            fill.solid()
+            fill.fore_color.rgb = RGBColor(*primary_rgb)
+
             # Set the AI-generated title
             title = slide.shapes.title
             title.text = title_text
@@ -268,10 +291,11 @@ async def generate_presentation(prompt: str = Form(...), slide_count: int = Form
             content = slide.placeholders[1]
             content.text = content_text
 
-            # Auto-fit the content to prevent it from going outside the slide
+            # Apply secondary color to content text
             for paragraph in content.text_frame.paragraphs:
                 for run in paragraph.runs:
-                    run.font.size = Pt(14)  # Set a reasonable font size
+                    run.font.size = Pt(16)  # Set a reasonable font size
+                    run.font.color.rgb = RGBColor(*secondary_rgb)  # Apply secondary color to text
             content.text_frame.word_wrap = True  # Ensure text wraps within the text box
 
             # Fetch an image related to the keywords using an image API
@@ -333,6 +357,13 @@ def extract_text_by_label(text: str, label: str, default: str = "") -> str:
     except Exception as e:
         print(f"Error extracting {label}: {e}")
         return default
+
+def hex_to_rgb(hex_color: str) -> tuple:
+    """
+    Converts a hex color string (e.g., "#RRGGBB") to an RGB tuple.
+    """
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
 def get_image_url_based_on_keywords(keywords: str) -> str:
     url = f"https://api.pexels.com/v1/search?query={keywords}&per_page=1"
